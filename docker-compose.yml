@@ -1,0 +1,12 @@
+services:
+  nutri:
+    build: .
+    container_name: nutri-equivalencias
+    ports:
+      - "8000:8000"
+    volumes:
+      # Una carpeta por mes: dietas/noviembre2026, dietas/diciembre2026, …
+      - ./dietas:/app/dietas
+      # El estado (planes editados, alimentos propios) persiste aquí
+      - ./data:/app/data
+    restart: unless-stopped

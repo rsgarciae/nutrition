@@ -1,0 +1,11 @@
+.venv-pdf
+.venv
+data/
+__pycache__/
+*.pyc
+*.png
+pdf_text.txt
+cols.txt
+menu_cols.txt
+.git
+.DS_Store

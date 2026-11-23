@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f7d54">
+<title>Nutri · Equivalencias</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥗</text></svg>">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <div class="logo">🥗</div>
+      <div>
+        <h1 id="brandName">Mi plan</h1>
+        <p id="brandSub">Cargando…</p>
+      </div>
+    </div>
+    <div class="kcal-pill" id="kcalPill">—</div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-view="plan" aria-selected="true"><span class="ico">🍽️</span>Plan</button>
+    <button data-view="plato" aria-selected="false"><span class="ico">⚖️</span>Armar plato</button>
+    <button data-view="equiv" aria-selected="false"><span class="ico">🔁</span>Equivalencias</button>
+    <button data-view="datos" aria-selected="false"><span class="ico">⚙️</span>Datos</button>
+  </nav>
+
+  <main id="view"></main>
+</div>
+
+<div class="backdrop" id="backdrop" data-open="false"></div>
+<section class="sheet" id="sheet" data-open="false" aria-hidden="true">
+  <div class="sheet-handle"></div>
+  <h3 id="sheetTitle">Elegir alimento</h3>
+  <p class="hint" id="sheetHint"></p>
+  <div class="sheet-tabs" id="sheetTabs"></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</section>
+
+<div class="toast" id="toast" data-show="false"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
