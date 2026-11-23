@@ -149,6 +149,116 @@ function grandTotals() {
   return total;
 }
 
+function normName(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* Objetivos de macros: salen del plan del mes que estás siguiendo. */
+function dayTargets() {
+  const opt = currentOption();
+  return opt ? totalsOf(opt.meals) : null;
+}
+
+function plateTargets(plate) {
+  const opt = currentOption();
+  if (!opt) return null;
+  const key = normName(plate.name);
+  if (!key) return null;
+  const meal = (opt.meals || []).find(m => {
+    const mk = normName(m.name);
+    return mk && (key === mk || key.startsWith(mk) || key.includes(mk));
+  });
+  return meal ? totalsOf([meal]) : null;
+}
+
+/** Rango de grasa entre las opciones del menú, si difieren bastante. */
+function optionsFatSpread() {
+  const month = activeMonth();
+  const fats = (month?.options || []).map(o => totalsOf(o.meals).f);
+  if (fats.length < 2) return null;
+  const min = Math.min(...fats);
+  const max = Math.max(...fats);
+  if (max - min <= Math.max(10, min * 0.25)) return null;
+  return { min, max };
+}
+
+function budgetRow(label, value, target) {
+  if (!target) {
+    return `<div class="bud">
+      <span class="bud-label">${esc(label)}</span>
+      <span class="bud-bar"><i style="width:0"></i></span>
+      <span class="bud-val"><b>${value}</b> g</span>
+    </div>`;
+  }
+  const pct = Math.round((value / target) * 100);
+  const cls = pct > 100 ? 'over' : (pct >= 90 ? 'warn' : '');
+  const extra = value > target ? ` <em>+${value - target}</em>` : '';
+  return `<div class="bud ${cls}">
+    <span class="bud-label">${esc(label)}</span>
+    <span class="bud-bar"><i style="width:${Math.min(100, pct)}%"></i></span>
+    <span class="bud-val"><b>${value}</b> / ${target} g${extra}</span>
+  </div>`;
+}
+
+function plateMacroLine(t, target) {
+  if (!target) return `P ${t.p} g · C ${t.c} g · G ${t.f} g`;
+  const pair = (value, goal) =>
+    `<span class="${value > goal ? 'over' : ''}">${value}</span>/${goal}`;
+  return `P ${pair(t.p, target.p)} · C ${pair(t.c, target.c)} · G ${pair(t.f, target.f)} g`;
+}
+
+/* --- bloqueo suave al pasarse de macros --- */
+
+const MACRO_WARN_KEY = 'nutri.macroWarn';
+const MACRO_LABEL = { p: 'proteína', c: 'carbohidratos', f: 'grasa' };
+
+function macroWarnEnabled() {
+  return localStorage.getItem(MACRO_WARN_KEY) !== '0';
+}
+
+function setMacroWarn(on) {
+  localStorage.setItem(MACRO_WARN_KEY, on ? '1' : '0');
+}
+
+/** Macros que cruzan el objetivo del día con este cambio (antes -> después). */
+function crossedTargets(before, after) {
+  if (!macroWarnEnabled()) return [];
+  const targets = dayTargets();
+  if (!targets) return [];
+  const out = [];
+  for (const key of ['p', 'c', 'f']) {
+    const goal = targets[key];
+    if (!goal) continue;
+    if (before[key] <= goal && after[key] > goal) {
+      out.push({ label: MACRO_LABEL[key], value: after[key], target: goal });
+    }
+  }
+  return out;
+}
+
+function confirmExcess(crossed) {
+  const detail = crossed
+    .map(c => `· ${c.label}: ${c.value} / ${c.target} g`)
+    .join('\n');
+  return confirm(`Con esto te pasas del objetivo del día:\n\n${detail}\n\n¿Agregarlo de todos modos?`);
+}
+
+/** Aplica un cambio ya hecho; si cruza un objetivo, pregunta y revierte si se cancela. */
+function guardedChange(before, revert) {
+  const crossed = crossedTargets(before, grandTotals());
+  if (!crossed.length) return true;
+  if (confirmExcess(crossed)) return true;
+  revert();
+  render();
+  return false;
+}
+
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
@@ -332,9 +442,12 @@ function plateSlotRow(pi, slot, si) {
 }
 
 function viewPlato() {
-  const target = monthKcal();
+  const kcalTarget = monthKcal();
   const total = grandTotals();
-  const pct = target ? Math.min(100, Math.round((total.kcal / target) * 100)) : 0;
+  const targets = dayTargets();
+  const opt = currentOption();
+  const spread = optionsFatSpread();
+  const pct = kcalTarget ? Math.min(100, Math.round((total.kcal / kcalTarget) * 100)) : 0;
 
   const chips = PLATOS
     .filter(p => (p.slots || []).length)
@@ -343,15 +456,16 @@ function viewPlato() {
 
   const cards = PLATOS.map((plate, pi) => {
     const t = totalsOf([{ slots: plate.slots }]);
+    const goal = plateTargets(plate);
     const rows = (plate.slots || []).map((s, si) => plateSlotRow(pi, s, si)).join('');
     return `
       <section class="card plate">
         <div class="card-head">
           <div>
             <button class="plate-name" data-act="pl-rename" data-plate="${pi}">${esc(plate.name)}</button>
-            <div class="plate-macros">P ${t.p} g · C ${t.c} g · G ${t.f} g</div>
+            <div class="plate-macros">${plateMacroLine(t, goal)}</div>
           </div>
-          <span class="right">${t.kcal} kcal</span>
+          <span class="right">${t.kcal}${goal ? ' / ' + goal.kcal : ''} kcal</span>
         </div>
         <div class="slots">${rows || '<div class="empty" style="padding:12px 0">Sin alimentos todavía.</div>'}</div>
         <div class="plate-add">
@@ -366,18 +480,31 @@ function viewPlato() {
       </section>`;
   }).join('');
 
+  const budget = targets
+    ? `<div class="budgets">
+         ${budgetRow('Proteína', total.p, targets.p)}
+         ${budgetRow('Carbohidratos', total.c, targets.c)}
+         ${budgetRow('Grasa', total.f, targets.f)}
+       </div>
+       <p class="caption">Objetivo: tu plan de hoy${opt ? ' (' + esc(opt.name) + ')' : ''}.
+         En cada plato verás <b>consumido / objetivo</b>.
+         <button class="link-btn" data-act="pl-warn">${macroWarnEnabled() ? 'Aviso al pasarme: activado' : 'Aviso al pasarme: desactivado'}</button></p>
+       ${spread ? `<p class="caption warn">⚠ Las opciones del menú no tienen los mismos macros:
+         la grasa va de ${spread.min} g a ${spread.max} g según la opción.</p>` : ''}`
+    : `<div class="macros">
+         <span>Proteína <b>${total.p} g</b></span>
+         <span>Carbohidratos <b>${total.c} g</b></span>
+         <span>Grasa <b>${total.f} g</b></span>
+       </div>`;
+
   return `
     <section class="card">
       <div class="card-head">
         <h2>Total de tus platos</h2>
-        <span class="right">${total.kcal} / ${target || '—'} kcal</span>
+        <span class="right">${total.kcal} / ${kcalTarget || '—'} kcal</span>
       </div>
       <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="macros">
-        <span>Proteína <b>${total.p} g</b></span>
-        <span>Carbohidratos <b>${total.c} g</b></span>
-        <span>Grasa <b>${total.f} g</b></span>
-      </div>
+      ${budget}
       ${chips ? `<div class="chips" style="margin-top:10px">${chips}</div>` : ''}
     </section>
 
@@ -827,7 +954,9 @@ $('#view').addEventListener('click', async (e) => {
         hint: 'Elige el grupo y luego el alimento.',
         categories: S.categories.map(c => c.id),
         onPick: (f) => {
+          const before = grandTotals();
           plate.slots.push({ category: f.category, foodId: f.id, count: 1 });
+          if (!guardedChange(before, () => plate.slots.pop())) return;
           savePlatos(); render();
         },
       });
@@ -845,9 +974,22 @@ $('#view').addEventListener('click', async (e) => {
     const data = await res.json();
     const found = data.items.filter(i => i.matched);
     const missing = data.items.filter(i => !i.matched).map(i => i.text);
+
+    const before = grandTotals();
+    const added = [];
     for (const it of found) {
-      plate.slots.push({ category: it.category, foodId: it.foodId, count: 1 });
+      const slot = { category: it.category, foodId: it.foodId, count: 1 };
+      plate.slots.push(slot);
+      added.push(slot);
     }
+    const keep = guardedChange(before, () => {
+      for (const slot of added) {
+        const idx = plate.slots.indexOf(slot);
+        if (idx >= 0) plate.slots.splice(idx, 1);
+      }
+    });
+    if (!keep) { toast('Se canceló: no se agregó nada'); return; }
+
     savePlatos(); render();
     if (!found.length) toast('No reconocí nada de eso');
     else if (missing.length) toast('Agregado a ' + plate.name + '. No reconocí: ' + missing.join(', '));
@@ -855,10 +997,20 @@ $('#view').addEventListener('click', async (e) => {
     return;
   }
 
+  if (act === 'pl-warn') {
+    const on = !macroWarnEnabled();
+    setMacroWarn(on);
+    toast(on ? 'Te avisaré antes de pasarte de un macro' : 'Ya no te avisaré al pasarte');
+    render();
+    return;
+  }
+
   if (act === 'pl-minus' || act === 'pl-plus') {
     const slot = PLATOS[pi]?.slots[si];
     if (!slot) return;
+    const before = grandTotals();
     slot.count = Math.max(0.5, slot.count + (act === 'pl-plus' ? 0.5 : -0.5));
+    if (!guardedChange(before, () => { slot.count = Math.max(0.5, slot.count - (act === 'pl-plus' ? 0.5 : -0.5)); })) return;
     savePlatos(); render(); return;
   }
 

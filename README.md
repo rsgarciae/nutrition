@@ -66,6 +66,27 @@ against the daily target, with a per-plate breakdown (e.g. *Desayuno · 358 kcal
 Comida · 455 kcal*). Plates are stored in the browser (localStorage), so they survive
 reloads without involving the server.
 
+**Macro budget.** The card at the top also tracks protein, carbs and fat against the day
+target implied by the plan option you're following (`consumed / target`), turning amber
+near the limit and **red when exceeded** (`Grasa 72 / 65 g +7`). Each plate shows the same
+as `consumed/target` for the meal it matches in the plan — e.g. `G 14/12 g` — so you can
+spread the fat across the day instead of spending it all at dinner.
+
+**Exceeding is allowed, but you're asked first.** Nothing is silently dropped: when an
+addition would cross a macro target the app shows
+
+```
+Con esto te pasas del objetivo del día:
+
+· grasa: 66 / 65 g
+
+¿Agregarlo de todos modos?
+```
+
+and only adds the food if you accept. It doesn't nag once you're already over — it only
+stops at the crossing point — and the check can be switched off from the link in that same
+card.
+
 ### 3. Equivalencias — the full table
 
 Every food with its exchange group, household measure and grams per portion, plus a
@@ -293,6 +314,7 @@ tools/              developer scripts (see below)
 .venv/bin/python tools/inspect_table.py     # parsed exchange table, grouped
 .venv/bin/python tools/inspect_menu.py      # parsed menu, per option and meal
 .venv/bin/python tools/inspect_state.py     # full state: months, portions, warnings
+.venv/bin/python tools/check_macros.py      # macro coherence by group and by meal
 .venv/bin/python tools/check_months.py      # regression test: month detection + edit preservation
 ```
 
@@ -328,6 +350,15 @@ Optional environment variables:
   document, not from the app. Fix them in *Datos* if your nutritionist updates them.
 - **The day total will rarely equal the kcal target exactly.** Portions are snapped to halves and
   the target is the nutritionist's rounded number (this month: ~1933 vs 1980).
+- **The four menu options are not nutritionally equivalent.** They're all ~1980 kcal on paper,
+  but their macro totals differ a lot — this month fat goes from **43 g to 102 g** depending on
+  the option, because the exchange table maps some dishes to coarse groups (e.g. 150 g of
+  shredded beef counts as 5 "moderate fat" protein exchanges). The macro budget is always
+  measured against the option selected in **Plan**, and the app warns you when the spread is
+  large. `tools/check_macros.py` prints the full per-option breakdown.
+- **Kcal from macros ≠ the displayed kcal** by ~3%. Each group's published kcal (e.g. fruit 115)
+  is slightly above what its macro content yields (112). The app shows the table's kcal and uses
+  the macro values for the budgets; each column is consistent with itself.
 - **Gram values are the weight as served** (cooked for rice/pasta/meat, drained for legumes).
 - Only the **first page** of the menu PDF is read, which is how these menus are laid out.
 

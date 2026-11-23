@@ -384,6 +384,61 @@ button { cursor: pointer; }
 .link-btn.danger { color: var(--danger); }
 .link-btn:hover { text-decoration: underline; }
 
+/* ---------- presupuesto de macros ---------- */
+.budgets {
+  display: grid;
+  gap: 9px;
+  margin-top: 14px;
+}
+
+.bud {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.bud-label { color: var(--muted); font-weight: 600; white-space: nowrap; }
+
+.bud-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+  min-width: 40px;
+}
+.bud-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.bud-val {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bud-val b { color: var(--ink); font-weight: 700; }
+.bud-val em { font-style: normal; font-weight: 700; }
+
+.bud.warn .bud-bar i { background: var(--warn); }
+.bud.over .bud-bar i { background: var(--danger); }
+.bud.over .bud-val,
+.bud.over .bud-val b,
+.bud.over .bud-val em { color: var(--danger); }
+
+.plate-macros .over { color: var(--danger); font-weight: 800; }
+
+.caption {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 10px 0 0;
+  line-height: 1.45;
+}
+.caption.warn { color: var(--warn); }
+
 /* ---------- totals ---------- */
 .totals { position: sticky; bottom: 78px; }
 
