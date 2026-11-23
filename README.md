@@ -49,14 +49,22 @@ You can:
 - see the day's total kcal / protein / carbs / fat against the target;
 - switch between **saved months** with the month selector at the top.
 
-### 2. Armar plato — build a free plate
+### 2. Armar plato — build your own plates
 
-Type what you're about to eat, the way you'd say it:
+Four plates come by default — **Desayuno, Colación, Comida, Cena** — and you can add, rename
+or delete any of them (`＋ Nuevo plato`, or tap the ✎ next to a plate's name).
+
+Inside a plate, type what you're about to eat, the way you'd say it:
 
 > `pechuga de pollo cocida con arroz y aguacate`
 
 and it comes back with *chicken 30 g, rice 47 g, avocado 31 g* (one exchange of each).
-You can also pick foods by group. Live totals of kcal and macros.
+You can also pick foods from the list, adjust portions with `−` / `+`, and remove items.
+
+**Every plate keeps its own kcal and macros**, and the card at the top adds them all up
+against the daily target, with a per-plate breakdown (e.g. *Desayuno · 358 kcal,
+Comida · 455 kcal*). Plates are stored in the browser (localStorage), so they survive
+reloads without involving the server.
 
 ### 3. Equivalencias — the full table
 

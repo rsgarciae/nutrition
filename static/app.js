@@ -7,7 +7,7 @@ let S = null;               // estado completo (viene de /api/state)
 let CAT = {};               // categorías indexadas
 let VIEW = 'plan';
 let OPTION = 0;
-let PLATO = loadPlato();    // plato libre guardado en el navegador
+let PLATOS = loadPlatos();   // platos libres guardados en el navegador
 let saveTimer = null;
 let sheetPick = null;
 let sheetState = null;
@@ -100,11 +100,53 @@ function nextMonthName() {
   return names[date.getMonth()] + date.getFullYear();
 }
 
-function loadPlato() {
-  try { return JSON.parse(localStorage.getItem('nutri.plato') || '[]'); } catch { return []; }
+function newPlate(name) {
+  return {
+    id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name: name || 'Plato',
+    slots: [],
+  };
 }
-function savePlato() {
-  localStorage.setItem('nutri.plato', JSON.stringify(PLATO));
+
+function loadPlatos() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('nutri.platos') || 'null');
+    if (Array.isArray(raw) && raw.length) {
+      return raw.map(p => ({
+        id: p.id || newPlate(p.name).id,
+        name: p.name || 'Plato',
+        slots: Array.isArray(p.slots) ? p.slots : [],
+      }));
+    }
+  } catch { /* datos corruptos: se reinicia */ }
+
+  // migración del formato anterior (un solo plato)
+  let migrated = [];
+  try {
+    const old = JSON.parse(localStorage.getItem('nutri.plato') || '[]');
+    if (Array.isArray(old) && old.length) migrated = [{ ...newPlate('Mi plato'), slots: old }];
+  } catch { /* nada que migrar */ }
+
+  const plates = migrated.concat(['Desayuno', 'Colación', 'Comida', 'Cena'].map(newPlate));
+  localStorage.setItem('nutri.platos', JSON.stringify(plates));
+  localStorage.removeItem('nutri.plato');
+  return plates;
+}
+
+function savePlatos() {
+  localStorage.setItem('nutri.platos', JSON.stringify(PLATOS));
+}
+
+function grandTotals() {
+  const total = { kcal: 0, p: 0, c: 0, f: 0 };
+  for (const plate of PLATOS) {
+    const t = totalsOf([{ slots: plate.slots }]);
+    total.kcal += t.kcal;
+    total.p += t.p;
+    total.c += t.c;
+    total.f += t.f;
+  }
+  return total;
 }
 
 function toast(msg) {
@@ -267,61 +309,81 @@ function viewPlan() {
 
 /* -------------------------------------------------------------- vista plato */
 
+function plateSlotRow(pi, slot, si) {
+  const f = food(slot.foodId);
+  const g = gramsFor(slot);
+  const k = cat(slot.category);
+  return `
+    <div class="slot">
+      <div class="stepper">
+        <button data-act="pl-minus" data-plate="${pi}" data-slot="${si}" aria-label="Menos">−</button>
+        <span class="val">${esc(fmtCount(slot.count))}</span>
+        <button data-act="pl-plus" data-plate="${pi}" data-slot="${si}" aria-label="Más">+</button>
+      </div>
+      <div class="slot-main">
+        <div class="slot-name">${esc(f?.name || '—')}</div>
+        <div class="slot-meta">${esc(k.short)} · 1 porción = ${f?.grams ? grams(f.grams) + ' g' : '—'}</div>
+      </div>
+      <div class="slot-right">
+        <div class="grams">${g === null ? '—' : grams(g) + ' <small>g</small>'}</div>
+        <button class="icon-btn" data-act="pl-del" data-plate="${pi}" data-slot="${si}" aria-label="Quitar">×</button>
+      </div>
+    </div>`;
+}
+
 function viewPlato() {
-  const t = totalsOf([{ slots: PLATO }]);
   const target = monthKcal();
-  const rows = PLATO.map((s, i) => {
-    const f = food(s.foodId);
-    const g = gramsFor(s);
-    const k = cat(s.category);
+  const total = grandTotals();
+  const pct = target ? Math.min(100, Math.round((total.kcal / target) * 100)) : 0;
+
+  const chips = PLATOS
+    .filter(p => (p.slots || []).length)
+    .map(p => `<span class="chip">${esc(p.name)} · ${totalsOf([{ slots: p.slots }]).kcal} kcal</span>`)
+    .join('');
+
+  const cards = PLATOS.map((plate, pi) => {
+    const t = totalsOf([{ slots: plate.slots }]);
+    const rows = (plate.slots || []).map((s, si) => plateSlotRow(pi, s, si)).join('');
     return `
-      <div class="slot" data-meal="p" data-slot="${i}">
-        <div class="stepper">
-          <button data-act="pminus" data-slot="${i}">−</button>
-          <span class="val">${esc(fmtCount(s.count))}</span>
-          <button data-act="pplus" data-slot="${i}">+</button>
+      <section class="card plate">
+        <div class="card-head">
+          <div>
+            <button class="plate-name" data-act="pl-rename" data-plate="${pi}">${esc(plate.name)}</button>
+            <div class="plate-macros">P ${t.p} g · C ${t.c} g · G ${t.f} g</div>
+          </div>
+          <span class="right">${t.kcal} kcal</span>
         </div>
-        <div class="slot-main">
-          <div class="slot-name">${esc(f?.name || '—')}</div>
-          <div class="slot-meta">${esc(k.short)} · 1 porción = ${f?.grams ? grams(f.grams) + ' g' : '—'}</div>
+        <div class="slots">${rows || '<div class="empty" style="padding:12px 0">Sin alimentos todavía.</div>'}</div>
+        <div class="plate-add">
+          <input id="quickp-${pi}" type="text" autocomplete="off" placeholder="pechuga con arroz y aguacate…">
+          <button class="btn" data-act="pl-quick" data-plate="${pi}" aria-label="Agregar">＋</button>
         </div>
-        <div class="slot-right">
-          <div class="grams">${g === null ? '—' : grams(g) + ' <small>g</small>'}</div>
-          <button class="icon-btn" data-act="pdel" data-slot="${i}" aria-label="Quitar">×</button>
+        <div class="plate-foot">
+          <button class="link-btn" data-act="pl-add" data-plate="${pi}">Elegir de la lista</button>
+          ${(plate.slots || []).length ? `<button class="link-btn" data-act="pl-clear" data-plate="${pi}">Vaciar</button>` : ''}
+          ${PLATOS.length > 1 ? `<button class="link-btn danger" data-act="pl-delete" data-plate="${pi}">Eliminar</button>` : ''}
         </div>
-      </div>`;
+      </section>`;
   }).join('');
 
   return `
     <section class="card">
-      <div class="card-head"><h2>¿Qué vas a comer?</h2></div>
-      <p class="small" style="color:var(--muted);font-size:12.5px;margin:0 0 10px">
-        Escríbelo como lo dirías: <i>«pechuga de pollo con arroz y aguacate»</i>.
-      </p>
-      <div style="display:flex;gap:8px">
-        <input id="quick" type="text" autocomplete="off" placeholder="pechuga de pollo con arroz y aguacate">
-        <button class="btn" data-act="quickadd">Agregar</button>
-      </div>
-    </section>
-
-    <section class="card">
       <div class="card-head">
-        <h2>Mi plato</h2>
-        <span class="right">${t.kcal} kcal</span>
+        <h2>Total de tus platos</h2>
+        <span class="right">${total.kcal} / ${target || '—'} kcal</span>
       </div>
-      <div class="bar"><i style="width:${target ? Math.min(100, Math.round((t.kcal / target) * 100)) : 0}%"></i></div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
       <div class="macros">
-        <span>Proteína <b>${t.p} g</b></span>
-        <span>Carbohidratos <b>${t.c} g</b></span>
-        <span>Grasa <b>${t.f} g</b></span>
+        <span>Proteína <b>${total.p} g</b></span>
+        <span>Carbohidratos <b>${total.c} g</b></span>
+        <span>Grasa <b>${total.f} g</b></span>
       </div>
+      ${chips ? `<div class="chips" style="margin-top:10px">${chips}</div>` : ''}
     </section>
 
-    <section class="card">
-      <div class="slots">${rows || '<div class="empty">Tu plato está vacío.</div>'}</div>
-      <button class="ghost-btn" data-act="padd">＋ Agregar alimento</button>
-      ${PLATO.length ? '<button class="ghost-btn" data-act="pclear">Vaciar plato</button>' : ''}
-    </section>`;
+    ${cards}
+
+    <button class="ghost-btn" data-act="pl-new">＋ Nuevo plato</button>`;
 }
 
 /* ---------------------------------------------------------- vista equival. */
@@ -621,13 +683,13 @@ function closeSheet() {
   sheetState = null;
 }
 
-function openPrompt({ title, hint, placeholder, label, onSubmit }) {
+function openPrompt({ title, hint, placeholder, label, value, onSubmit }) {
   const sheet = $('#sheet');
   $('#sheetTitle').textContent = title;
   $('#sheetHint').textContent = hint || '';
   $('#sheetTabs').innerHTML = '';
   $('#sheetBody').innerHTML = `
-    <input id="promptInput" type="text" autocomplete="off" placeholder="${esc(placeholder || '')}">
+    <input id="promptInput" type="text" autocomplete="off" value="${esc(value || '')}" placeholder="${esc(placeholder || '')}">
     <button class="btn" id="promptGo" style="width:100%;margin-top:10px">${esc(label || 'Aplicar')}</button>`;
   sheetPick = null;
   sheetState = null;
@@ -635,10 +697,10 @@ function openPrompt({ title, hint, placeholder, label, onSubmit }) {
   sheet.setAttribute('aria-hidden', 'false');
   $('#backdrop').dataset.open = 'true';
   const go = () => {
-    const value = $('#promptInput').value.trim();
-    if (!value) { $('#promptInput').focus(); return; }
+    const text = $('#promptInput').value.trim();
+    if (!text) { $('#promptInput').focus(); return; }
     closeSheet();
-    onSubmit(value);
+    onSubmit(text);
   };
   $('#promptGo').addEventListener('click', go);
   $('#promptInput').addEventListener('keydown', ev => {
@@ -688,6 +750,7 @@ $('#view').addEventListener('click', async (e) => {
 
   const mi = el.dataset.meal !== undefined ? Number(el.dataset.meal) : null;
   const si = el.dataset.slot !== undefined ? Number(el.dataset.slot) : null;
+  const pi = el.dataset.plate !== undefined ? Number(el.dataset.plate) : null;
 
   if (act === 'option') { OPTION = Number(el.dataset.i); render(); return; }
 
@@ -754,21 +817,24 @@ $('#view').addEventListener('click', async (e) => {
     return;
   }
 
-  if (act === 'padd') {
-    openSheet({
-      title: 'Agregar a mi plato',
-      hint: 'Elige el grupo y luego el alimento.',
-      categories: S.categories.map(c => c.id),
-      onPick: (f) => {
-        PLATO.push({ category: f.category, foodId: f.id, count: 1 });
-        savePlato(); render();
-      },
-    });
-    return;
-  }
+  if (act === 'pl-add' || act === 'pl-quick') {
+    const plate = PLATOS[pi];
+    if (!plate) return;
 
-  if (act === 'quickadd') {
-    const input = $('#quick');
+    if (act === 'pl-add') {
+      openSheet({
+        title: 'Agregar a ' + plate.name,
+        hint: 'Elige el grupo y luego el alimento.',
+        categories: S.categories.map(c => c.id),
+        onPick: (f) => {
+          plate.slots.push({ category: f.category, foodId: f.id, count: 1 });
+          savePlatos(); render();
+        },
+      });
+      return;
+    }
+
+    const input = $('#quickp-' + pi);
     const text = (input?.value || '').trim();
     if (!text) { input?.focus(); return; }
     const res = await fetch('/api/interpret', {
@@ -780,23 +846,64 @@ $('#view').addEventListener('click', async (e) => {
     const found = data.items.filter(i => i.matched);
     const missing = data.items.filter(i => !i.matched).map(i => i.text);
     for (const it of found) {
-      PLATO.push({ category: it.category, foodId: it.foodId, count: 1 });
+      plate.slots.push({ category: it.category, foodId: it.foodId, count: 1 });
     }
-    savePlato(); render();
+    savePlatos(); render();
     if (!found.length) toast('No reconocí nada de eso');
-    else if (missing.length) toast('Agregado. No reconocí: ' + missing.join(', '));
-    else toast(found.length + (found.length === 1 ? ' alimento agregado' : ' alimentos agregados'));
+    else if (missing.length) toast('Agregado a ' + plate.name + '. No reconocí: ' + missing.join(', '));
+    else toast(found.length + (found.length === 1 ? ' alimento agregado' : ' alimentos agregados') + ' a ' + plate.name);
     return;
   }
 
-  if (act === 'pminus' || act === 'pplus') {
-    const item = PLATO[si];
-    item.count = Math.max(0.5, item.count + (act === 'pplus' ? 0.5 : -0.5));
-    savePlato(); render(); return;
+  if (act === 'pl-minus' || act === 'pl-plus') {
+    const slot = PLATOS[pi]?.slots[si];
+    if (!slot) return;
+    slot.count = Math.max(0.5, slot.count + (act === 'pl-plus' ? 0.5 : -0.5));
+    savePlatos(); render(); return;
   }
 
-  if (act === 'pdel') { PLATO.splice(si, 1); savePlato(); render(); return; }
-  if (act === 'pclear') { PLATO = []; savePlato(); render(); return; }
+  if (act === 'pl-del') {
+    PLATOS[pi]?.slots.splice(si, 1);
+    savePlatos(); render(); return;
+  }
+
+  if (act === 'pl-clear') {
+    PLATOS[pi].slots = [];
+    savePlatos(); render(); return;
+  }
+
+  if (act === 'pl-delete') {
+    const plate = PLATOS[pi];
+    if (!plate) return;
+    if (!confirm(`¿Eliminar el plato «${plate.name}» y sus alimentos?`)) return;
+    PLATOS.splice(pi, 1);
+    savePlatos(); render(); return;
+  }
+
+  if (act === 'pl-rename') {
+    const plate = PLATOS[pi];
+    if (!plate) return;
+    openPrompt({
+      title: 'Nombre del plato',
+      hint: 'Desayuno, Colación, Comida, Cena, Merienda…',
+      placeholder: 'Merienda',
+      value: plate.name,
+      label: 'Guardar nombre',
+      onSubmit: (name) => { plate.name = name; savePlatos(); render(); },
+    });
+    return;
+  }
+
+  if (act === 'pl-new') {
+    openPrompt({
+      title: 'Nuevo plato',
+      hint: 'Ponle nombre para identificarlo.',
+      placeholder: 'Merienda',
+      label: 'Crear plato',
+      onSubmit: (name) => { PLATOS.push(newPlate(name)); savePlatos(); render(); },
+    });
+    return;
+  }
 
   if (act === 'pickfile') { $('#' + el.dataset.target).click(); return; }
 
@@ -852,9 +959,16 @@ $('#view').addEventListener('click', async (e) => {
 });
 
 $('#view').addEventListener('keydown', (e) => {
-  if (e.target.id === 'quick' && e.key === 'Enter') {
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'quick') {
     e.preventDefault();
     $('#view [data-act="quickadd"]')?.click();
+    return;
+  }
+  if (e.target.id && e.target.id.startsWith('quickp-')) {
+    e.preventDefault();
+    const index = e.target.id.slice('quickp-'.length);
+    $(`#view [data-act="pl-quick"][data-plate="${index}"]`)?.click();
   }
 });
 
