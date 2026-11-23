@@ -30,6 +30,13 @@ function food(id) {
   return S ? S.foods.find(f => f.id === id) : null;
 }
 
+/** Grupo de un slot: usa el declarado o, si falta, el del alimento. */
+function slotCat(slot) {
+  if (slot && slot.category && CAT[slot.category]) return CAT[slot.category];
+  const f = slot ? food(slot.foodId) : null;
+  return cat(f ? f.category : (slot && slot.category));
+}
+
 function fmtCount(n) {
   const whole = Math.floor(n + 1e-6);
   const frac = n - whole;
@@ -58,7 +65,7 @@ function totalsOf(meals) {
   let kcal = 0, p = 0, c = 0, f = 0;
   for (const meal of meals) {
     for (const s of meal.slots || []) {
-      const k = cat(s.category);
+      const k = slotCat(s);
       kcal += s.count * k.kcal;
       p += s.count * (k.macros?.p || 0);
       c += s.count * (k.macros?.c || 0);
@@ -149,6 +156,19 @@ function grandTotals() {
   return total;
 }
 
+/** Total de un grupo de comidas sumando los subtotales ya redondeados. */
+function mealsTotals(meals) {
+  const total = { kcal: 0, p: 0, c: 0, f: 0 };
+  for (const meal of meals || []) {
+    const t = totalsOf([meal]);
+    total.kcal += t.kcal;
+    total.p += t.p;
+    total.c += t.c;
+    total.f += t.f;
+  }
+  return total;
+}
+
 function normName(text) {
   return String(text || '')
     .toLowerCase()
@@ -162,7 +182,7 @@ function normName(text) {
 /* Objetivos de macros: salen del plan del mes que estás siguiendo. */
 function dayTargets() {
   const opt = currentOption();
-  return opt ? totalsOf(opt.meals) : null;
+  return opt ? mealsTotals(opt.meals) : null;
 }
 
 function plateTargets(plate) {
@@ -180,7 +200,7 @@ function plateTargets(plate) {
 /** Rango de grasa entre las opciones del menú, si difieren bastante. */
 function optionsFatSpread() {
   const month = activeMonth();
-  const fats = (month?.options || []).map(o => totalsOf(o.meals).f);
+  const fats = (month?.options || []).map(o => mealsTotals(o.meals).f);
   if (fats.length < 2) return null;
   const min = Math.min(...fats);
   const max = Math.max(...fats);
@@ -259,6 +279,305 @@ function guardedChange(before, revert) {
   return false;
 }
 
+/* --- autocompletar --- */
+
+function snapshotPlates() {
+  return PLATOS.map(p => ({
+    name: p.name,
+    slots: (p.slots || []).map(s => ({ ...s })),
+  }));
+}
+
+/** Totales sin redondear (para comparar y buscar el mejor ajuste). */
+function rawTotalsOf(plates) {
+  const out = { kcal: 0, p: 0, c: 0, f: 0 };
+  for (const plate of plates) {
+    for (const s of plate.slots || []) {
+      const k = slotCat(s);
+      out.kcal += s.count * k.kcal;
+      out.p += s.count * (k.macros?.p || 0);
+      out.c += s.count * (k.macros?.c || 0);
+      out.f += s.count * (k.macros?.f || 0);
+    }
+  }
+  return out;
+}
+
+function roundedTotalsOf(plates) {
+  const out = { kcal: 0, p: 0, c: 0, f: 0 };
+  for (const plate of plates) {
+    const t = totalsOf([{ slots: plate.slots }]);
+    out.kcal += t.kcal;
+    out.p += t.p;
+    out.c += t.c;
+    out.f += t.f;
+  }
+  return out;
+}
+
+/** Error relativo cuadrático sobre los tres macros (kcal va implícita). */
+function macroError(t, target) {
+  let e = 0;
+  for (const key of ['p', 'c', 'f']) {
+    if (!target[key]) continue;
+    const d = (t[key] - target[key]) / target[key];
+    e += d * d;
+  }
+  return e;
+}
+
+const MAX_PORTION = 4;   // máximo de porciones al sugerir un alimento nuevo
+const MAX_COUNT = 12;    // tope absoluto de porciones de un slot
+
+function snapHalf(x) {
+  return Math.min(MAX_COUNT, Math.max(0.5, Math.round(x * 2) / 2));
+}
+
+/** Qué tan lejos quedó del objetivo (0 = clavado, 0.05 = 5% de desvío). */
+function targetDeviation(t, target) {
+  let dev = 0;
+  for (const key of ['p', 'c', 'f']) {
+    if (!target[key]) continue;
+    dev = Math.max(dev, Math.abs(t[key] - target[key]) / target[key]);
+  }
+  if (target.kcal) dev = Math.max(dev, Math.abs(t.kcal - target.kcal) / target.kcal);
+  return dev;
+}
+
+function deviationSummary(t, target) {
+  const diff = t.kcal - target.kcal;
+  const note = Math.abs(diff) <= 10
+    ? 'justo en el objetivo'
+    : (diff < 0 ? `faltan ${-diff} kcal` : `te pasas ${diff} kcal`);
+  const color = Math.abs(diff) <= 10 ? 'var(--accent-ink)' : (diff > 0 ? 'var(--danger)' : 'var(--warn)');
+  return `<div class="big">${t.kcal} / ${target.kcal} kcal</div>
+    <div class="small" style="color:${color}">${note}</div>`;
+}
+
+/** Sube/baja medias porciones de lo que ya hay hasta acercarse al objetivo. */
+function refineQuantities(plates, targets, maxSteps = 24, maxShift = 1) {
+  const shift = new Map();
+  let err = macroError(rawTotalsOf(plates), targets);
+
+  for (let n = 0; n < maxSteps; n++) {
+    let best = null;
+    plates.forEach((plate, pi) => {
+      (plate.slots || []).forEach((slot, si) => {
+        const key = pi + ':' + si;
+        const used = shift.get(key) || 0;
+        for (const delta of [0.5, -0.5]) {
+          if (Math.abs(used + delta) > maxShift + 1e-9) continue;
+          const next = slot.count + delta;
+          if (next < 0.5 || next > MAX_COUNT) continue;
+          const before = slot.count;
+          slot.count = next;
+          const e = macroError(rawTotalsOf(plates), targets);
+          slot.count = before;
+          if (e < err - 1e-9 && (!best || e < best.e)) {
+            best = { pi, si, next, e, delta, key, used };
+          }
+        }
+      });
+    });
+    if (!best) break;
+    shift.set(best.key, best.used + best.delta);
+    plates[best.pi].slots[best.si].count = best.next;
+    err = best.e;
+  }
+}
+
+/** Alimentos para rellenar: primero los del plan del mes (familiares y con sentido de comida). */
+function fillCandidates() {
+  const opt = currentOption();
+  const ids = new Set();
+  (opt?.meals || []).forEach(m => (m.slots || []).forEach(s => ids.add(s.foodId)));
+  const all = S.foods || [];
+  const fromPlan = all.filter(f => ids.has(f.id));
+  const pool = fromPlan.length >= 4 ? fromPlan : all.slice();
+  return pool.sort((a, b) => {
+    const sa = a.source === 'tabla' ? 0 : 1;
+    const sb = b.source === 'tabla' ? 0 : 1;
+    return sa - sb || a.name.localeCompare(b.name, 'es');
+  });
+}
+
+/** Elige alimentos para tapar lo que falta (máx. 6 alimentos, 4 porciones cada uno). */
+function fillGreedy(plates, targets) {
+  const chosen = [];
+  let cur = rawTotalsOf(plates);
+  let err = macroError(cur, targets);
+  const foods = fillCandidates();
+
+  for (let step = 0; step < 24; step++) {
+    let best = null;
+    for (const f of foods) {
+      const picked = chosen.find(c => c.foodId === f.id);
+      if (picked && picked.count >= MAX_PORTION) continue;
+      if (!picked && chosen.length >= 6) continue;
+      const k = cat(f.category);
+      for (const inc of [1, 0.5]) {
+        if (picked && picked.count + inc > MAX_PORTION) continue;
+        const t = {
+          p: cur.p + (k.macros?.p || 0) * inc,
+          c: cur.c + (k.macros?.c || 0) * inc,
+          f: cur.f + (k.macros?.f || 0) * inc,
+        };
+        const e = macroError(t, targets);
+        if (e < err - 1e-9 && (!best || e < best.e)) best = { f, inc, e, t };
+      }
+    }
+    if (!best) break;
+    const picked = chosen.find(c => c.foodId === best.f.id);
+    if (picked) picked.count += best.inc;
+    else chosen.push({ foodId: best.f.id, count: best.inc });
+    cur = best.t;
+    err = best.e;
+  }
+  return chosen;
+}
+
+function autocomplete() {
+  const targets = dayTargets();
+  if (!targets) {
+    toast('Necesitas el menú del mes para saber tus objetivos');
+    return;
+  }
+  const cur = roundedTotalsOf(PLATOS);
+  const missing = Math.max(0, targets.kcal - cur.kcal);
+  openChoose({
+    title: 'Autocompletar el día',
+    hint: missing
+      ? `Te faltan ${missing} kcal de ${targets.kcal}. ¿Cómo quieres llegar?`
+      : `Ya estás en ${cur.kcal} de ${targets.kcal} kcal. ¿Cómo quieres cerrar el día?`,
+    choices: [
+      {
+        label: 'Ajustar las cantidades de mis platos',
+        desc: 'Sube o baja porciones de lo que ya tienes, sin alimentos nuevos.',
+        onPick: () => runAdjust(targets),
+      },
+      {
+        label: 'Agregar un plato para rellenar',
+        desc: 'Deja tus platos como están y crea uno nuevo con lo que falta.',
+        onPick: () => runFill(targets),
+      },
+    ],
+  });
+}
+
+function runAdjust(targets) {
+  const work = snapshotPlates();
+  const empty = !work.some(p => (p.slots || []).length);
+  if (empty) {
+    toast('Primero agrega algún alimento a tus platos');
+    return;
+  }
+
+  const cur = rawTotalsOf(work);
+  if (cur.kcal > 0) {
+    const factor = Math.min(4, Math.max(0.25, targets.kcal / cur.kcal));
+    if (Math.abs(factor - 1) > 0.02) {
+      for (const plate of work) {
+        for (const slot of plate.slots) slot.count = snapHalf(slot.count * factor);
+      }
+    }
+  }
+  refineQuantities(work, targets);
+
+  const lines = [];
+  work.forEach((plate, pi) => {
+    plate.slots.forEach((slot, si) => {
+      const from = PLATOS[pi].slots[si].count;
+      if (Math.abs(from - slot.count) < 1e-9) return;
+      const f = food(slot.foodId);
+      lines.push(
+        `${esc(plate.name)} · ${esc(f?.name || '—')}: ` +
+        `<b>${fmtCount(from)} → ${fmtCount(slot.count)}</b>`
+      );
+    });
+  });
+
+  if (!lines.length) {
+    toast('Tus cantidades ya están en el objetivo');
+    return;
+  }
+
+  const after = roundedTotalsOf(work);
+  const far = targetDeviation(after, targets) > 0.05;
+  openReview({
+    title: 'Ajustar cantidades',
+    hint: far
+      ? `${lines.length} cambio(s). Con solo lo que ya tienes no se llega al objetivo:`
+      : `${lines.length} cambio(s). Así queda tu día:`,
+    lines,
+    summary: `${deviationSummary(after, targets)}
+      <div class="small">P ${after.p}/${targets.p} · C ${after.c}/${targets.c} · G ${after.f}/${targets.f} g</div>`,
+    confirmLabel: 'Aplicar cambios',
+    secondary: far
+      ? { label: 'Mejor: agregar un plato para rellenar', onPick: () => runFill(targets) }
+      : null,
+    onConfirm: () => {
+      work.forEach((plate, pi) => {
+        PLATOS[pi].slots = plate.slots.map(s => ({ ...s }));
+      });
+      savePlatos();
+      render();
+      toast('Cantidades ajustadas');
+    },
+  });
+}
+
+function runFill(targets) {
+  const cur = rawTotalsOf(PLATOS);
+  if ((targets.p - cur.p) <= 1 && (targets.c - cur.c) <= 1 && (targets.f - cur.f) <= 1) {
+    toast('Ya cumpliste tus objetivos');
+    return;
+  }
+
+  const chosen = fillGreedy(PLATOS, targets);
+  if (!chosen.length) {
+    toast('No encontré alimentos para completarlo');
+    return;
+  }
+
+  const slots = chosen.map(c => ({
+    category: cat((food(c.foodId) || {}).category).id,
+    foodId: c.foodId,
+    count: c.count,
+  }));
+
+  const lines = chosen.map(c => {
+    const f = food(c.foodId);
+    const g = grams(c.count * ((f && f.grams) || 0));
+    return `${esc(f?.name || '—')}: <b>${fmtCount(c.count)}</b> · ${g} g`;
+  });
+
+  const work = snapshotPlates();
+  work.push({ name: 'Para completar', slots });
+  const after = roundedTotalsOf(work);
+  const far = targetDeviation(after, targets) > 0.05;
+  const gapKcal = Math.max(0, targets.kcal - cur.kcal);
+
+  openReview({
+    title: 'Plato sugerido',
+    hint: gapKcal > targets.kcal * 0.45
+      ? `El hueco es grande (${gapKcal} kcal): esto llenará casi el día completo.`
+      : (far
+        ? 'Se agrega como plato nuevo; aun así queda algo lejos del objetivo.'
+        : 'Se agrega como un plato nuevo; tus otros platos no cambian.'),
+    lines,
+    summary: `${deviationSummary(after, targets)}
+      <div class="small">P ${after.p}/${targets.p} · C ${after.c}/${targets.c} · G ${after.f}/${targets.f} g</div>`,
+    confirmLabel: 'Agregar «Para completar»',
+    onConfirm: () => {
+      PLATOS.push(newPlate('Para completar'));
+      PLATOS[PLATOS.length - 1].slots = slots;
+      savePlatos();
+      render();
+      toast('Plato agregado: «Para completar»');
+    },
+  });
+}
+
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
@@ -323,7 +642,7 @@ function render() {
 function slotRow(slot, mi, si) {
   const f = food(slot.foodId);
   const g = gramsFor(slot);
-  const k = cat(slot.category);
+  const k = slotCat(slot);
   const meta = f
     ? `1 porción = ${f.grams ? grams(f.grams) + ' g' : f.measure || '—'}${k.kcal ? ' · ' + k.short : ''}`
     : 'alimento no disponible';
@@ -366,10 +685,9 @@ function viewPlan() {
     <button data-act="option" data-i="${i}" aria-pressed="${i === OPTION}">${esc(o.name)}</button>`
   ).join('');
 
-  const t = totalsOf(opt.meals);
+  const t = mealsTotals(opt.meals);
   const target = monthKcal();
   const pct = target ? Math.min(100, Math.round((t.kcal / target) * 100)) : 0;
-
   const meals = opt.meals.map((meal, mi) => {
     const mt = totalsOf([meal]);
     const rows = (meal.slots || []).map((s, si) => slotRow(s, mi, si)).join('');
@@ -422,7 +740,7 @@ function viewPlan() {
 function plateSlotRow(pi, slot, si) {
   const f = food(slot.foodId);
   const g = gramsFor(slot);
-  const k = cat(slot.category);
+  const k = slotCat(slot);
   return `
     <div class="slot">
       <div class="stepper">
@@ -442,12 +760,17 @@ function plateSlotRow(pi, slot, si) {
 }
 
 function viewPlato() {
-  const kcalTarget = monthKcal();
-  const total = grandTotals();
+  const nutriKcal = monthKcal();
   const targets = dayTargets();
+  const kcalGoal = targets ? targets.kcal : nutriKcal;
+  const total = grandTotals();
   const opt = currentOption();
   const spread = optionsFatSpread();
-  const pct = kcalTarget ? Math.min(100, Math.round((total.kcal / kcalTarget) * 100)) : 0;
+  const pct = kcalGoal ? Math.min(100, Math.round((total.kcal / kcalGoal) * 100)) : 0;
+  const gapNote = targets && nutriKcal && Math.abs(nutriKcal - targets.kcal) >= 10
+    ? ` La meta de tu nutriólogo es ${nutriKcal} kcal; el menú suma ${targets.kcal}`
+      + ' con la tabla de intercambios.'
+    : '';
 
   const chips = PLATOS
     .filter(p => (p.slots || []).length)
@@ -487,7 +810,7 @@ function viewPlato() {
          ${budgetRow('Grasa', total.f, targets.f)}
        </div>
        <p class="caption">Objetivo: tu plan de hoy${opt ? ' (' + esc(opt.name) + ')' : ''}.
-         En cada plato verás <b>consumido / objetivo</b>.
+         En cada plato verás <b>consumido / objetivo</b>.${esc(gapNote)}
          <button class="link-btn" data-act="pl-warn">${macroWarnEnabled() ? 'Aviso al pasarme: activado' : 'Aviso al pasarme: desactivado'}</button></p>
        ${spread ? `<p class="caption warn">⚠ Las opciones del menú no tienen los mismos macros:
          la grasa va de ${spread.min} g a ${spread.max} g según la opción.</p>` : ''}`
@@ -501,11 +824,12 @@ function viewPlato() {
     <section class="card">
       <div class="card-head">
         <h2>Total de tus platos</h2>
-        <span class="right">${total.kcal} / ${kcalTarget || '—'} kcal</span>
+        <span class="right">${total.kcal} / ${kcalGoal || '—'} kcal</span>
       </div>
       <div class="bar"><i style="width:${pct}%"></i></div>
       ${budget}
       ${chips ? `<div class="chips" style="margin-top:10px">${chips}</div>` : ''}
+      ${targets ? `<button class="ghost-btn" data-act="autocomplete" style="margin-top:12px">⚡ Autocompletar el día</button>` : ''}
     </section>
 
     ${cards}
@@ -836,6 +1160,64 @@ function openPrompt({ title, hint, placeholder, label, value, onSubmit }) {
   setTimeout(() => $('#promptInput')?.focus(), 220);
 }
 
+function openChoose({ title, hint, choices }) {
+  const sheet = $('#sheet');
+  $('#sheetTitle').textContent = title;
+  $('#sheetHint').textContent = hint || '';
+  $('#sheetTabs').innerHTML = '';
+  $('#sheetBody').innerHTML = choices.map((c, i) => `
+    <button class="pick-item" data-choice="${i}">
+      <div class="grow">
+        <div class="nm">${esc(c.label)}</div>
+        <div class="ms">${esc(c.desc || '')}</div>
+      </div>
+      <div class="gr">›</div>
+    </button>`).join('');
+  sheetPick = null;
+  sheetState = null;
+  sheet.dataset.open = 'true';
+  sheet.setAttribute('aria-hidden', 'false');
+  $('#backdrop').dataset.open = 'true';
+  $$('#sheetBody [data-choice]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const choice = choices[Number(btn.dataset.choice)];
+      closeSheet();
+      if (choice && typeof choice.onPick === 'function') choice.onPick();
+    });
+  });
+}
+
+function openReview({ title, hint, lines, summary, confirmLabel, onConfirm, secondary }) {
+  const sheet = $('#sheet');
+  $('#sheetTitle').textContent = title;
+  $('#sheetHint').textContent = hint || '';
+  $('#sheetTabs').innerHTML = '';
+  $('#sheetBody').innerHTML = `
+    <div class="review">${lines.map(l => `<div class="review-line">${l}</div>`).join('')}</div>
+    ${summary ? `<div class="conv-out" style="margin-top:14px">${summary}</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn secondary" id="reviewCancel" style="flex:1">Cancelar</button>
+      <button class="btn" id="reviewOk" style="flex:2">${esc(confirmLabel || 'Aplicar')}</button>
+    </div>
+    ${secondary ? `<button class="ghost-btn" id="reviewAlt" style="margin-top:8px">${esc(secondary.label)}</button>` : ''}`;
+  sheetPick = null;
+  sheetState = null;
+  sheet.dataset.open = 'true';
+  sheet.setAttribute('aria-hidden', 'false');
+  $('#backdrop').dataset.open = 'true';
+  $('#reviewCancel').addEventListener('click', closeSheet);
+  $('#reviewOk').addEventListener('click', () => {
+    closeSheet();
+    onConfirm();
+  });
+  if (secondary) {
+    $('#reviewAlt').addEventListener('click', () => {
+      closeSheet();
+      secondary.onPick();
+    });
+  }
+}
+
 /* ---------------------------------------------------------------- eventos */
 
 document.addEventListener('click', async (e) => {
@@ -996,6 +1378,8 @@ $('#view').addEventListener('click', async (e) => {
     else toast(found.length + (found.length === 1 ? ' alimento agregado' : ' alimentos agregados') + ' a ' + plate.name);
     return;
   }
+
+  if (act === 'autocomplete') { autocomplete(); return; }
 
   if (act === 'pl-warn') {
     const on = !macroWarnEnabled();

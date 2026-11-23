@@ -439,6 +439,22 @@ button { cursor: pointer; }
 }
 .caption.warn { color: var(--warn); }
 
+/* ---------- revisión de autocompletar ---------- */
+.review {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 2px 12px;
+}
+.review-line {
+  font-size: 13.5px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.review-line:first-child { border-top: 0; }
+
 /* ---------- totals ---------- */
 .totals { position: sticky; bottom: 78px; }
 

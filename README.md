@@ -87,6 +87,20 @@ and only adds the food if you accept. It doesn't nag once you're already over �
 stops at the crossing point — and the check can be switched off from the link in that same
 card.
 
+**⚡ Autocompletar** fills the rest of the day. It always asks *how* first, so the outcome is
+predictable:
+
+1. **Ajustar las cantidades de mis platos** — scales every existing plate by the same factor
+   and then nudges at most ±1 portion per item, without adding new foods. You see the exact
+   list of changes (`Huevo: 3 → 4`) before applying. If the plates are too empty to reach the
+   target, it says so and offers the second option.
+2. **Agregar un plato para rellenar** — leaves your plates untouched and proposes a new
+   *«Para completar»* plate built only from foods of the plan you're following, at most 4
+   portions of each, with the resulting day totals.
+
+Both show a preview (`1946 / 1934 kcal · P 137/137 · C 193/193 · G 70/69`) and only apply
+when you confirm.
+
 ### 3. Equivalencias — the full table
 
 Every food with its exchange group, household measure and grams per portion, plus a
@@ -348,17 +362,21 @@ Optional environment variables:
 - **The table's own numbers are respected as-is**, including odd ones (e.g. `Pulpa de res 25 g`
   per portion, `Pan molido 161 g`, `Salmón` listed under "very low fat"). These come from the
   document, not from the app. Fix them in *Datos* if your nutritionist updates them.
-- **The day total will rarely equal the kcal target exactly.** Portions are snapped to halves and
-  the target is the nutritionist's rounded number (this month: ~1933 vs 1980).
+- **There are two kcal numbers, on purpose.** The nutritionist's target (1980 kcal) and the
+  menu's own total (1934 kcal when computed with the exchange table) differ by ~2%, because the
+  menu is built from exchange portions. **Plan** compares the menu against the prescription;
+  **Armar plato** compares your plates against the menu, so kcal and macros always hit 100%
+  together.
+- **Macro values are calibrated to each group's kcal.** The protein/carbs/fat of every exchange
+  group were adjusted by ≤0.35 g so that `4P + 4C + 9F` equals the group's published kcal
+  exactly — otherwise reaching 100% of your macros still left ~50 kcal unaccounted for. The kcal
+  printed in your table (25, 70, 115…) is unchanged. `tools/check_macros.py` verifies this.
 - **The four menu options are not nutritionally equivalent.** They're all ~1980 kcal on paper,
-  but their macro totals differ a lot — this month fat goes from **43 g to 102 g** depending on
+  but their macro totals differ a lot — this month fat goes from **47 g to 106 g** depending on
   the option, because the exchange table maps some dishes to coarse groups (e.g. 150 g of
   shredded beef counts as 5 "moderate fat" protein exchanges). The macro budget is always
   measured against the option selected in **Plan**, and the app warns you when the spread is
   large. `tools/check_macros.py` prints the full per-option breakdown.
-- **Kcal from macros ≠ the displayed kcal** by ~3%. Each group's published kcal (e.g. fruit 115)
-  is slightly above what its macro content yields (112). The app shows the table's kcal and uses
-  the macro values for the budgets; each column is consistent with itself.
 - **Gram values are the weight as served** (cooked for rice/pasta/meat, drained for legumes).
 - Only the **first page** of the menu PDF is read, which is how these menus are laid out.
 

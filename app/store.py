@@ -440,6 +440,8 @@ def load_state() -> dict:
     data = _read_state()
     fresh = data and data.get("version") == STATE_VERSION and isinstance(data.get("months"), list)
     if fresh and data.get("meta", {}).get("fingerprint") == _fingerprint():
+        # los grupos viven en el código: siempre se usa la versión vigente
+        data["categories"] = CATEGORIES
         return data
     # se agregó/cambió algún PDF en `dietas/`: se reconstruye conservando ajustes
     state = build_state()

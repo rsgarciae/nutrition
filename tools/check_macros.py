@@ -3,6 +3,7 @@
 Uso:  python tools/check_macros.py
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -12,6 +13,17 @@ from app.categories import CATEGORIES  # noqa: E402
 from app.store import build_state  # noqa: E402
 
 CAL = {"p": 4, "c": 4, "f": 9}
+
+
+def num(x):
+    """Entero si lo es, si no con 2 decimales."""
+    x = float(x)
+    return int(x) if x.is_integer() else round(x, 3)
+
+
+def rnd(x):
+    """Redondeo half-up, igual que Math.round() en el front-end."""
+    return int(math.floor(float(x) + 0.5))
 
 
 def kcal_from_macros(m):
@@ -28,8 +40,9 @@ for c in CATEGORIES:
     problems += 0 if ok else 1
     print(
         f"  {'OK ' if ok else 'REV'} {c['name']:<44} {c['kcal']:>3} kcal"
-        f" | P{c['macros']['p']:>2} C{c['macros']['c']:>2} G{c['macros']['f']:>2}"
-        f" -> {derived:>3} kcal ({diff:+d})"
+        f" | P {num(c['macros']['p']):>5} C {num(c['macros']['c']):>6}"
+        f" G {num(c['macros']['f']):>6}"
+        f" -> {derived:>7.2f} kcal ({diff:+.2f})"
     )
 print(f"  grupos fuera de tolerancia: {problems}\n")
 
@@ -48,12 +61,12 @@ def totals(slots):
         out["kcal"] += s["count"] * k["kcal"]
         for macro in ("p", "c", "f"):
             out[macro] += s["count"] * k["macros"][macro]
-    return {k: round(v) for k, v in out.items()}
+    return {k: rnd(v) for k, v in out.items()}
 
 
 print(f"== 2. {month['label']}: macros por comida y suma del día ==")
 for opt in month["options"]:
-    day = totals([s for meal in opt["meals"] for s in meal["slots"]])
+    flat = totals([s for meal in opt["meals"] for s in meal["slots"]])
     acc = {"kcal": 0, "p": 0, "c": 0, "f": 0}
     print(f"  {opt['name']}")
     for meal in opt["meals"]:
@@ -64,7 +77,8 @@ for opt in month["options"]:
             f"    {meal['name']:<10} {t['kcal']:>4} kcal"
             f" | P {t['p']:>3} g  C {t['c']:>3} g  G {t['f']:>3} g"
         )
-    same = all(abs(acc[k] - day[k]) <= 1 for k in day)
+    day = acc  # igual que la app: suma de subtotales por comida
+    same = all(abs(acc[k] - flat[k]) <= 1 for k in day)
     print(
         f"    {'-' * 62}\n"
         f"    {'TOTAL':<10} {day['kcal']:>4} kcal"
@@ -73,8 +87,8 @@ for opt in month["options"]:
     )
     kcal_macros = day["p"] * 4 + day["c"] * 4 + day["f"] * 9
     print(
-        f"    kcal desde macros: {kcal_macros} vs {day['kcal']} mostradas"
-        f" ({kcal_macros - day['kcal']:+d})\n"
+        f"    kcal de la tabla: {day['kcal']} · kcal de los macros ya redondeados:"
+        f" {kcal_macros} ({kcal_macros - day['kcal']:+d} por redondeo de gramos)\n"
     )
 
 print("== 3. Reparto de grasa por comida (objetivo del plan) ==")
