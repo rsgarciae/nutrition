@@ -44,7 +44,7 @@ function fmtCount(n) {
   for (const [val, glyph] of FRACTIONS) {
     if (Math.abs(frac - val) < 0.03) return (whole ? whole : '') + glyph;
   }
-  return n.toFixed(1);
+  return String(Math.round(n * 100) / 100);
 }
 
 function grams(n) {
@@ -331,6 +331,30 @@ const MAX_COUNT = 12;    // tope absoluto de porciones de un slot
 
 function snapHalf(x) {
   return Math.min(MAX_COUNT, Math.max(0.5, Math.round(x * 2) / 2));
+}
+
+/** Fija los gramos exactos de un slot (las porciones se recalculan). */
+function setSlotGrams(pi, si, gramos) {
+  const slot = PLATOS[pi] && PLATOS[pi].slots[si];
+  const f = slot && food(slot.foodId);
+  if (!slot || !f || !f.grams) {
+    toast('Este alimento no tiene gramos por porción');
+    return;
+  }
+  if (!Number.isFinite(gramos) || gramos <= 0) {
+    toast('Escribe una cantidad de gramos válida');
+    return;
+  }
+  const before = grandTotals();
+  const prev = slot.count;
+  slot.count = Math.min(MAX_COUNT, Math.max(0.1, Math.round((gramos / f.grams) * 1000) / 1000));
+  if (!guardedChange(before, () => { slot.count = prev; })) {
+    toast('Se canceló: los gramos no cambiaron');
+    return;
+  }
+  savePlatos();
+  render();
+  toast(`${grams(gramsFor(slot))} g · ${fmtCount(slot.count)} porciones`);
 }
 
 /** Qué tan lejos quedó del objetivo (0 = clavado, 0.05 = 5% de desvío). */
@@ -753,7 +777,9 @@ function plateSlotRow(pi, slot, si) {
         <div class="slot-meta">${esc(k.short)} · 1 porción = ${f?.grams ? grams(f.grams) + ' g' : '—'}</div>
       </div>
       <div class="slot-right">
-        <div class="grams">${g === null ? '—' : grams(g) + ' <small>g</small>'}</div>
+        <button class="grams-btn" data-act="pl-grams" data-plate="${pi}" data-slot="${si}" title="Tocar para escribir los gramos">
+          ${g === null ? '—' : grams(g) + ' <small>g</small>'}
+        </button>
         <button class="icon-btn" data-act="pl-del" data-plate="${pi}" data-slot="${si}" aria-label="Quitar">×</button>
       </div>
     </div>`;
@@ -1134,13 +1160,15 @@ function closeSheet() {
   sheetState = null;
 }
 
-function openPrompt({ title, hint, placeholder, label, value, onSubmit }) {
+function openPrompt({ title, hint, placeholder, label, value, numeric, onSubmit }) {
   const sheet = $('#sheet');
   $('#sheetTitle').textContent = title;
   $('#sheetHint').textContent = hint || '';
   $('#sheetTabs').innerHTML = '';
   $('#sheetBody').innerHTML = `
-    <input id="promptInput" type="text" autocomplete="off" value="${esc(value || '')}" placeholder="${esc(placeholder || '')}">
+    <input id="promptInput" type="${numeric ? 'number' : 'text'}"
+      ${numeric ? 'inputmode="decimal" step="any" min="0"' : 'autocomplete="off"'}
+      value="${esc(value || '')}" placeholder="${esc(placeholder || '')}">
     <button class="btn" id="promptGo" style="width:100%;margin-top:10px">${esc(label || 'Aplicar')}</button>`;
   sheetPick = null;
   sheetState = null;
@@ -1389,12 +1417,35 @@ $('#view').addEventListener('click', async (e) => {
     return;
   }
 
+  if (act === 'pl-grams') {
+    const slot = PLATOS[pi] && PLATOS[pi].slots[si];
+    const f = slot && food(slot.foodId);
+    if (!slot || !f) return;
+    if (!f.grams) { toast('Este alimento no tiene gramos por porción'); return; }
+    const current = gramsFor(slot);
+    openPrompt({
+      title: f.name,
+      hint: `1 porción = ${grams(f.grams)} g${f.measure ? ' (' + f.measure + ')' : ''}. `
+        + 'Escribe los gramos que quieres comer.',
+      placeholder: String(grams(f.grams)),
+      value: String(grams(current)),
+      label: 'Aplicar gramos',
+      numeric: true,
+      onSubmit: (text) => setSlotGrams(pi, si, Number.parseFloat(String(text).replace(',', '.'))),
+    });
+    return;
+  }
+
   if (act === 'pl-minus' || act === 'pl-plus') {
     const slot = PLATOS[pi]?.slots[si];
     if (!slot) return;
     const before = grandTotals();
-    slot.count = Math.max(0.5, slot.count + (act === 'pl-plus' ? 0.5 : -0.5));
-    if (!guardedChange(before, () => { slot.count = Math.max(0.5, slot.count - (act === 'pl-plus' ? 0.5 : -0.5)); })) return;
+    const prev = slot.count;
+    // si el número no está en la rejilla de ½, se alinea al siguiente escalón
+    slot.count = act === 'pl-plus'
+      ? Math.min(MAX_COUNT, Math.floor(slot.count * 2 + 1e-6) / 2 + 0.5)
+      : Math.max(0.5, Math.ceil(slot.count * 2 - 1e-6) / 2 - 0.5);
+    if (!guardedChange(before, () => { slot.count = prev; })) return;
     savePlatos(); render(); return;
   }
 

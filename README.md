@@ -61,6 +61,11 @@ Inside a plate, type what you're about to eat, the way you'd say it:
 and it comes back with *chicken 30 g, rice 47 g, avocado 31 g* (one exchange of each).
 You can also pick foods from the list, adjust portions with `−` / `+`, and remove items.
 
+**Tap the grams to type an exact amount.** If one portion of milk is 233 g and you want 300 g,
+tap `233 g`, write `300` and the app recalculates the portion count (1.29). From there `−` / `+`
+keep moving in half-portion steps (350 g, 233 g…), so you're never locked into the published
+measure.
+
 **Every plate keeps its own kcal and macros**, and the card at the top adds them all up
 against the daily target, with a per-plate breakdown (e.g. *Desayuno · 358 kcal,
 Comida · 455 kcal*). Plates are stored in the browser (localStorage), so they survive
